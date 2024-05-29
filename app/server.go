@@ -7,33 +7,10 @@ import (
 
 	"os"
 
+	"strconv"
+
 	"strings"
-	// Uncomment this block to pass the first stage
-	// "net"
-	// "os"
 )
-
-const (
-	GET = "GET"
-
-	POST = "POST"
-
-	PUT = "PUT"
-
-	DELETE = "DELETE"
-)
-
-type RequestParams struct {
-	method string
-
-	path string
-
-	version string
-
-	sender string
-
-	headers map[string]string
-}
 
 func main() {
 
@@ -61,145 +38,94 @@ func main() {
 
 		}
 
-		handleConnection(conn)
+		go func(c net.Conn) {
 
-		go handleConnection(conn)
+			defer c.Close()
 
-	}
+			// Read data from connection
 
-}
+			data := make([]byte, 1024)
 
-func handleConnection(conn net.Conn) {
+			n, err := c.Read(data)
 
-	request := make([]byte, 1024)
+			if err != nil {
 
-	_, err := conn.Read(request)
+				fmt.Println("Error reading data:", err.Error())
 
-	if err != nil {
+				return
 
-		return
+			}
 
-	}
+			// Extract potential request path
 
-	reqParams := getReqParams(request)
+			request := string(data[:n])
 
-	switch reqParams.method {
+			lines := strings.Split(request, "\r\n")
 
-	case GET:
+			path := getRequestPath(lines[0])
 
-		_ = handleGetRequest(reqParams, conn)
+			if path == "/" {
 
-		return
+				conn.Write([]byte("HTTP/1.1 200 OK\r\n\r\n"))
 
-	default:
+				return
 
-		return
+			}
 
-	}
+			if strings.HasPrefix(path, "/echo/") {
 
-}
+				text := strings.TrimPrefix(path, "/echo/")
 
-func handleGetRequest(reqParams RequestParams, conn net.Conn) error {
+				conn.Write([]byte(fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", len(text), text)))
 
-	switch reqParams.path {
+				return
 
-	case "/":
+			}
 
-		conn.Write([]byte("HTTP/1.1 200 OK\r\n\r\n"))
+			if path == "/user-agent" {
 
-		return nil
+				fmt.Println(lines[2])
 
-	default:
+				resBody := strings.TrimPrefix(lines[2], "User-Agent: ")
 
-		reqPathAndValue := strings.Split(reqParams.path, "/")
+				conn.Write([]byte(fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s", len(resBody), resBody)))
 
-		switch reqPathAndValue[1] {
+				return
 
-		case "echo":
+			}
 
-			conn.Write([]byte(fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s",
+			if strings.HasPrefix(path, "/files/") {
 
-				len(reqPathAndValue[2]), reqPathAndValue[2])))
+				directory := os.Args[2]
 
-			return nil
+				fileName := strings.TrimPrefix(path, "/files/")
 
-		case "user-agent":
+				data, err := os.ReadFile(directory + fileName)
 
-			reqHeader := reqParams.headers["User-Agent"]
+				if err != nil {
 
-			conn.Write([]byte(fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s",
+					conn.Write([]byte("HTTP/1.1 404 Not Found\r\n\r\n"))
 
-				len(reqHeader), reqHeader)))
+				} else {
 
-			return nil
+					conn.Write([]byte("HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: " + strconv.Itoa(len(data)) + "\r\n\r\n" + string(data) + "\r\n\r\n"))
 
-		default:
+				}
+
+			}
 
 			conn.Write([]byte("HTTP/1.1 404 Not Found\r\n\r\n"))
 
-			return nil
-
-		}
+		}(conn)
 
 	}
 
 }
 
-func getReqParams(request []byte) RequestParams {
+func getRequestPath(line string) string {
 
-	requestString := string(request)
+	path := strings.Split(line, " ")[1]
 
-	fields := strings.Split(strings.Split(requestString, "\r\n\r\n")[0], "\r\n")
-
-	// extract request type and path and http version
-
-	reqDetails := strings.Split(fields[0], " ")
-
-	hostDetails := strings.Split(fields[1], " ")
-
-	reqHeaders := getHeaders(fields)
-
-	return RequestParams{
-
-		method: reqDetails[0],
-
-		path: reqDetails[1],
-
-		version: reqDetails[2],
-
-		sender: strings.TrimSpace(hostDetails[1]),
-
-		headers: reqHeaders,
-	}
-
-}
-
-func getHeaders(reqDetails []string) map[string]string {
-
-	headers := make(map[string]string)
-
-	for index, elem := range reqDetails {
-
-		if index == 0 || index == 1 {
-
-			continue
-
-		} else if elem == "" || elem == " " {
-
-			break
-
-		}
-
-		temp := strings.Split(elem, ":")
-
-		headerName := strings.TrimSpace(temp[0])
-
-		headerValue := strings.TrimSpace(temp[1])
-
-		headers[headerName] = headerValue
-
-	}
-
-	return headers
+	return path
 
 }
