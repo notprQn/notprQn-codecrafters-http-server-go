@@ -3,11 +3,13 @@ package main
 import (
 	"fmt"
 
+	"strings"
+
+	//Uncomment this block to pass the first stage
+
 	"net"
 
 	"os"
-
-	"strings"
 )
 
 func main() {
@@ -24,7 +26,7 @@ func main() {
 
 	}
 
-	conn, err := l.Accept()
+	res, err := l.Accept()
 
 	if err != nil {
 
@@ -34,49 +36,43 @@ func main() {
 
 	}
 
-	data := make([]byte, 4096)
+	requestBuffer := make([]byte, 4096)
 
-	i, err := conn.Read(data)
-
-	fmt.Println("data data", i)
+	_, err = res.Read(requestBuffer)
 
 	if err != nil {
 
-		fmt.Println("Error reading data: ", err.Error())
-
-		os.Exit(1)
+		return
 
 	}
 
-	request_parts := strings.Split(string(data), "\r\n")
+	request := string(requestBuffer)
 
-	path := strings.Split(request_parts[0], " ")[1]
+	requestPath := strings.Split(request, " ")[1]
 
-	var response string
+	response := ""
 
-	if path == "/" {
+	if requestPath == "/" {
 
 		response = "HTTP/1.1 200 OK\r\n\r\n"
 
-	} else if path[0:6] == "/echo/" {
+	} else if strings.HasPrefix(requestPath, "/echo/") {
 
-		echo := path[6:]
+		echoStr := strings.TrimPrefix(requestPath, "/echo/")
 
-		response = fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s", len(echo), echo)
+		response = fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s", len(echoStr), echoStr)
 
 	} else {
 
-		response = "HTTP/1.1 404 NOT FOUND \r\n\r\n"
+		response = "HTTP/1.1 404 Not Found\r\n\r\n"
 
 	}
 
-	_, err = conn.Write([]byte(response))
+	_, err = res.Write([]byte(response))
 
 	if err != nil {
 
-		fmt.Println("Error writing data: ", err.Error())
-
-		os.Exit(1)
+		return
 
 	}
 
