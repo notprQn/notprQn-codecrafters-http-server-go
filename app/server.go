@@ -154,8 +154,6 @@ func main() {
 
 				message := req.Path[len("/echo/"):]
 
-				fmt.Fprintf(conn, "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s", len(message), message)
-
 				if v, ok := req.Headers["Accept-Encoding"]; ok {
 
 					if v == "gzip" {
