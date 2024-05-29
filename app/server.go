@@ -3,16 +3,98 @@ package main
 import (
 	"fmt"
 
-	"strings"
-
-	//Uncomment this block to pass the first stage
-
 	"net"
 
 	"os"
+
+	"strconv"
+
+	"strings"
 )
 
+const (
+	OK = "HTTP/1.1 200 OK\r\n\r\n"
+
+	NOT_FOUND = "HTTP/1.1 404 Not Found\r\n\r\n"
+
+	TCP_HOST = "0.0.0.0"
+
+	TCP_PORT = "4221"
+)
+
+type httpRequest struct {
+	method string
+
+	Headers map[string]string
+
+	path string
+
+	Body string
+}
+
+func (req *httpRequest) parseRequest(request string) *httpRequest {
+
+	requestLines := strings.Split(request, "\r\n")
+
+	req.method = strings.Split(requestLines[0], " ")[0]
+
+	req.Headers = make(map[string]string)
+
+	req.path = strings.Split(requestLines[0], " ")[1]
+
+	for i := 1; i < len(requestLines); i++ {
+
+		if requestLines[i] == "" {
+
+			req.Body = requestLines[i+1]
+
+			break
+
+		}
+
+		header := strings.Split(requestLines[i], ": ")
+
+		req.Headers[header[0]] = header[1]
+
+	}
+
+	return req
+
+}
+
+func (req *httpRequest) parsePath() string {
+
+	return strings.TrimPrefix(req.path, "/echo/")
+
+}
+
+func (req *httpRequest) generateReponse(status string, body string, headers ...string) string {
+
+	var sb strings.Builder
+
+	sb.WriteString("HTTP/1.1 ")
+
+	sb.WriteString(status)
+
+	for _, header := range headers {
+
+		sb.WriteString(header)
+
+		sb.WriteString("\r\n")
+
+	}
+
+	sb.WriteString("\r\n")
+
+	sb.WriteString(body)
+
+	return sb.String()
+
+}
+
 func main() {
+
+	// You can use print statements as follows for debugging, they'll be visible when running tests.
 
 	fmt.Println("Logs from your program will appear here!")
 
@@ -26,7 +108,7 @@ func main() {
 
 	}
 
-	res, err := l.Accept()
+	conn, err := l.Accept()
 
 	if err != nil {
 
@@ -36,43 +118,31 @@ func main() {
 
 	}
 
-	requestBuffer := make([]byte, 4096)
+	var buf []byte = make([]byte, 1024)
 
-	_, err = res.Read(requestBuffer)
+	conn.Read(buf)
 
-	if err != nil {
+	req := new(httpRequest)
 
-		return
+	req.parseRequest(string(buf))
 
-	}
+	if req.path == "/" {
 
-	request := string(requestBuffer)
+		conn.Write([]byte(OK))
 
-	requestPath := strings.Split(request, " ")[1]
+	} else if strings.HasPrefix(req.path, "/echo/") {
 
-	response := ""
+		msg := req.parsePath()
 
-	if requestPath == "/" {
+		conn.Write([]byte(req.generateReponse("200 OK\r\n", req.parsePath(), "Content-type: text/plain", "Content-Length: "+strconv.Itoa(len(msg)))))
 
-		response = "HTTP/1.1 200 OK\r\n\r\n"
+	} else if req.path == "/user-agent" {
 
-	} else if strings.HasPrefix(requestPath, "/echo/") {
-
-		echoStr := strings.TrimPrefix(requestPath, "/echo/")
-
-		response = fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s", len(echoStr), echoStr)
+		conn.Write([]byte(req.generateReponse("200 OK\r\n", req.Headers["User-Agent"], "Content-type: text/plain", "Content-Length: "+strconv.Itoa(len(req.Headers["User-Agent"])))))
 
 	} else {
 
-		response = "HTTP/1.1 404 Not Found\r\n\r\n"
-
-	}
-
-	_, err = res.Write([]byte(response))
-
-	if err != nil {
-
-		return
+		conn.Write([]byte(NOT_FOUND))
 
 	}
 
