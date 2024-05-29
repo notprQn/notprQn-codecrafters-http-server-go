@@ -1,30 +1,31 @@
 package main
 
 import (
+	"bytes"
+
 	"fmt"
 
 	"net"
 
 	"os"
 
-	"strconv"
-
 	"strings"
 )
 
 func main() {
 
+	// You can use print statements as follows for debugging, they'll be visible when running tests.
+
 	fmt.Println("Logs from your program will appear here!")
 
+	// Uncomment this block to pass the first stage
+
 	l, err := net.Listen("tcp", "0.0.0.0:4221")
-
 	if err != nil {
-
 		fmt.Println("Failed to bind to port 4221")
-
 		os.Exit(1)
-
 	}
+	defer l.Close()
 
 	for {
 
@@ -38,94 +39,132 @@ func main() {
 
 		}
 
-		go func(c net.Conn) {
-
-			defer c.Close()
-
-			// Read data from connection
-
-			data := make([]byte, 1024)
-
-			n, err := c.Read(data)
-
-			if err != nil {
-
-				fmt.Println("Error reading data:", err.Error())
-
-				return
-
-			}
-
-			// Extract potential request path
-
-			request := string(data[:n])
-
-			lines := strings.Split(request, "\r\n")
-
-			path := getRequestPath(lines[0])
-
-			if path == "/" {
-
-				conn.Write([]byte("HTTP/1.1 200 OK\r\n\r\n"))
-
-				return
-
-			}
-
-			if strings.HasPrefix(path, "/echo/") {
-
-				text := strings.TrimPrefix(path, "/echo/")
-
-				conn.Write([]byte(fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", len(text), text)))
-
-				return
-
-			}
-
-			if path == "/user-agent" {
-
-				fmt.Println(lines[2])
-
-				resBody := strings.TrimPrefix(lines[2], "User-Agent: ")
-
-				conn.Write([]byte(fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s", len(resBody), resBody)))
-
-				return
-
-			}
-
-			if strings.HasPrefix(path, "/files/") {
-
-				directory := os.Args[2]
-
-				fileName := strings.TrimPrefix(path, "/files/")
-
-				data, err := os.ReadFile(directory + fileName)
-
-				if err != nil {
-
-					conn.Write([]byte("HTTP/1.1 404 Not Found\r\n\r\n"))
-
-				} else {
-
-					conn.Write([]byte("HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: " + strconv.Itoa(len(data)) + "\r\n\r\n" + string(data) + "\r\n\r\n"))
-
-				}
-
-			}
-
-			conn.Write([]byte("HTTP/1.1 404 Not Found\r\n\r\n"))
-
-		}(conn)
+		go handleConnection(conn)
 
 	}
 
 }
 
-func getRequestPath(line string) string {
+func handleConnection(conn net.Conn) {
 
-	path := strings.Split(line, " ")[1]
+	//frees memory by closing connection at end of function
 
-	return path
+	defer conn.Close()
+
+	buf := make([]byte, 1024)
+
+	conn.Read(buf)
+
+	buf = bytes.Trim(buf, "\x00")
+
+	bufString := strings.Split(string(buf), "\n")
+
+	request := strings.Split(bufString[0], " ")
+
+	host := bufString[1]
+
+	// method := request[0]
+
+	method := request[0]
+
+	path := request[1]
+
+	version := request[2]
+
+	fmt.Printf("Port: %s\nPath: %s\nHTTP version: %s\n", host, path, version)
+
+	var response string
+
+	switch {
+
+	case path == "/":
+
+		response = "HTTP/1.1 200 OK\r\n\r\n"
+
+	case strings.Contains(path, "echo"):
+
+		echostring := strings.Split(path, "/")
+
+		response = "HTTP/1.1 200 OK\r\n"
+
+		response += fmt.Sprintf("Content-Type: text/plain\r\nContent-Length: %d\r\n\r\n", len(echostring[2]))
+
+		response += echostring[2]
+
+	case path == "/user-agent":
+
+		user_agent := bufString[2]
+
+		user_agent_echo := strings.Split(user_agent, " ")
+
+		response = "HTTP/1.1 200 OK\r\n"
+
+		// must subtract one becuase length also counts carriage return as character
+
+		response += fmt.Sprintf("Content-Type: text/plain\r\nContent-Length: %d\r\n\r\n", len(user_agent_echo[1])-1)
+
+		response += user_agent_echo[1]
+
+	case method == "GET" && strings.Contains(path, "files"):
+
+		directory := os.Args[2]
+
+		fileName := strings.TrimPrefix(path, "/files/")
+
+		data, err := os.ReadFile(directory + fileName)
+
+		if err != nil {
+
+			response = "HTTP/1.1 404 Not Found\r\n\r\n"
+
+		} else {
+
+			dataString := string(data)
+
+			response = "HTTP/1.1 200 OK\r\n"
+
+			response += fmt.Sprintf("Content-Type: application/octet-stream\r\nContent-Length: %d\r\n\r\n", len(dataString))
+
+			response += dataString
+
+		}
+
+	case method == "POST" && strings.Contains(path, "files"):
+
+		directory := os.Args[2]
+
+		fileName := strings.TrimPrefix(path, "/files/")
+
+		filepath := fmt.Sprintf("%s%s", directory, fileName)
+
+		f, err := os.Create(filepath)
+
+		if err != nil {
+
+			fmt.Printf("Unable to create file: %s\n", filepath)
+
+		}
+
+		_, err = f.WriteString(bufString[len(bufString)-1])
+
+		if err != nil {
+
+			fmt.Println("Unable to write to file")
+
+		}
+
+		response = "HTTP/1.1 201 Created\r\n"
+
+		response += fmt.Sprintf("Content-Type: application/octet-stream\r\nContent-Length: %d\r\n\r\n", len(bufString[len(bufString)-1]))
+
+		response += bufString[len(bufString)-1]
+
+	default:
+
+		response = "HTTP/1.1 404 Not Found\r\n\r\n"
+
+	}
+
+	conn.Write([]byte(response))
 
 }
