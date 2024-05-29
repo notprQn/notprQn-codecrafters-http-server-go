@@ -1,223 +1,263 @@
 package main
 
 import (
+	"flag"
+
 	"fmt"
+
+	"io"
 
 	"net"
 
 	"os"
 
 	"strings"
-	// Uncomment this block to pass the first stage
-	// "net"
-	// "os"
 )
 
-type Request struct {
-	Method string
-
-	Headers map[string]string
-
-	Path string
-
-	Body string
-}
-
-func ParseRequest(rawReq string) *Request {
-
-	req := &Request{Headers: make(map[string]string)}
-
-	parts := strings.Split(rawReq, "\r\n")
-
-	reqLine := strings.Fields(parts[0])
-
-	req.Method = reqLine[0]
-
-	req.Path = reqLine[1]
-
-	part := 1
-
-	for parts[part] != "" {
-
-		header := strings.Split(parts[part], ": ")
-
-		req.Headers[header[0]] = header[1]
-
-		part++
-
-	}
-
-	part++
-
-	req.Body = parts[part]
-
-	return req
-
-}
-
-type Server struct {
-	Addr string
-
-	Port string
-
-	Fs string
-}
+var directory string
 
 func main() {
 
-	// You can use print statements as follows for debugging, they'll be visible when running tests.
+	flag.StringVar(&directory, "directory", ".", "the directory to serve files from")
 
-	fmt.Println("Logs from your program will appear here!")
+	flag.Parse()
 
-	// Uncomment this block to pass the first stage
+	if directory != "" {
 
-	//
+		if _, err := os.Stat(directory); os.IsNotExist(err) {
 
-	s := &Server{
-
-		Addr: "0.0.0.0",
-
-		Port: "4221",
-	}
-
-	if len(os.Args) > 2 {
-
-		if os.Args[1] == "--directory" {
-
-			s.Fs = os.Args[2]
-
-			err := os.Chdir(s.Fs)
-
-			if err != nil {
-
-				fmt.Fprintf(os.Stderr, "unable to serve FS %s error: %s", s.Fs, err)
-
-				os.Exit(1)
-
-			}
+			panic(err)
 
 		}
 
 	}
 
-	l, err := net.Listen("tcp", fmt.Sprintf("%s:%s", s.Addr, s.Port))
+	l, err := net.Listen("tcp", "0.0.0.0:4221")
 
 	if err != nil {
 
-		fmt.Fprintf(os.Stderr, "Failed to bind to port %s", s.Port)
-
-		os.Exit(1)
+		panic(err)
 
 	}
-
-	defer l.Close()
 
 	for {
 
-		conn, err := l.Accept()
+		con, err := l.Accept()
 
 		if err != nil {
 
-			fmt.Fprintln(os.Stderr, "Error accepting connection: ", err.Error())
-
-			os.Exit(1)
+			panic(err)
 
 		}
 
-		go func(conn net.Conn) {
+		go handle(con)
 
-			defer conn.Close()
+	}
 
-			buf := make([]byte, 1024)
+}
 
-			n, err := conn.Read(buf)
+func handle(c net.Conn) {
+
+	defer c.Close()
+
+	first, err := readUntil(c, []byte("\r\n"))
+
+	if err != nil {
+
+		panic(err)
+
+	}
+
+	ua := ""
+
+	cl := ""
+
+	ae := ""
+
+	cln := 0
+
+	for {
+
+		line, err := readUntil(c, []byte("\r\n"))
+
+		if err != nil {
+
+			panic(err)
+
+		}
+
+		if len(line) == 0 {
+
+			break
+
+		}
+
+		if strings.HasPrefix(string(line), "User-Agent: ") {
+
+			ua = string(line)[len("User-Agent: "):]
+
+		}
+
+		if strings.HasPrefix(string(line), "Content-Length: ") {
+
+			cl = string(line)[len("Content-Length: "):]
+
+		}
+
+		if strings.HasPrefix(string(line), "Accept-Encoding: ") {
+
+			ae = string(line)[len("Accept-Encoding: "):]
+
+		}
+
+	}
+
+	if cl != "" {
+
+		fmt.Sscanf(cl, "%d", &cln)
+
+	}
+
+	body := make([]byte, cln)
+
+	if cln > 0 {
+
+		_, err = io.ReadFull(c, body)
+
+		if err != nil {
+
+			panic(err)
+
+		}
+
+	}
+
+	parts := strings.Split(string(first), " ")
+
+	method := parts[0]
+
+	path := parts[1]
+
+	if path == "/" {
+
+		c.Write([]byte("HTTP/1.1 200 OK\r\n\r\n"))
+
+	} else if strings.HasPrefix(path, "/echo/") && len(path) > len("/echo/") {
+
+		echo := path[len("/echo/"):]
+
+		if ae == "gzip" || strings.HasPrefix(ae, "gzip, ") || strings.HasSuffix(ae, ", gzip") || strings.Contains(ae, ", gzip,") {
+
+			fmt.Fprintf(c, "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\nContent-Encoding: gzip\r\n\r\n%s", len(echo), echo)
+
+		} else {
+
+			fmt.Fprintf(c, "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s", len(echo), echo)
+
+		}
+
+	} else if string(path) == "/user-agent" {
+
+		fmt.Fprintf(c, "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s", len(ua), ua)
+
+	} else if strings.HasPrefix(path, "/files/") && len(path) > len("/files/") {
+
+		if method == "GET" {
+
+			file := path[len("/files/"):]
+
+			f, err := os.Open(directory + "/" + file)
 
 			if err != nil {
 
-				fmt.Fprintln(os.Stderr, "listening error occurred: ", err)
+				c.Write([]byte("HTTP/1.1 404 Not Found\r\n\r\n"))
 
-				os.Exit(1)
-
-			}
-
-			req := ParseRequest(string(buf[:n]))
-
-			if req.Path == "/" {
-
-				conn.Write([]byte("HTTP/1.1 200 OK\r\n\r\n"))
+				return
 
 			}
 
-			if strings.HasPrefix(req.Path, "/echo/") {
+			fi, err := f.Stat()
 
-				customHeaders := ""
+			if err != nil {
 
-				message := req.Path[len("/echo/"):]
+				c.Write([]byte("HTTP/1.1 404 Not Found\r\n\r\n"))
 
-				if v, ok := req.Headers["Accept-Encoding"]; ok {
-
-					if v == "gzip" {
-
-						customHeaders += "Content-Encoding: gzip\r\n"
-
-					}
-
-				}
-
-				fmt.Fprintf(conn, "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n%s\r\n%s", len(message), customHeaders, message)
+				return
 
 			}
 
-			if strings.HasPrefix(req.Path, "/user-agent") {
+			fmt.Fprintf(c, "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: %d\r\n\r\n", fi.Size())
 
-				message := req.Headers["User-Agent"]
+			io.Copy(c, f)
 
-				fmt.Fprintf(conn, "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s", len(message), message)
+		} else if method == "POST" {
 
-			}
+			file := path[len("/files/"):]
 
-			if strings.HasPrefix(req.Path, "/files/") && req.Method == "GET" {
+			f, err := os.Create(directory + "/" + file)
 
-				file := req.Path[len("/files/"):]
+			if err != nil {
 
-				data, err := os.ReadFile(file)
+				c.Write([]byte("HTTP/1.1 500 Internal Server Error\r\n\r\n"))
 
-				if err != nil {
-
-					conn.Write([]byte("HTTP/1.1 404 Not Found\r\n\r\n"))
-
-					return
-
-				}
-
-				fmt.Fprintf(conn, "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: %d\r\n\r\n%s", len(data), data)
+				return
 
 			}
 
-			if strings.HasPrefix(req.Path, "/files/") && req.Method == "POST" {
+			defer f.Close()
 
-				file := req.Path[len("/files/"):]
+			_, err = f.Write(body)
 
-				err := os.WriteFile(file, []byte(req.Body), 0666)
+			if err != nil {
 
-				if err != nil {
+				c.Write([]byte("HTTP/1.1 500 Internal Server Error\r\n\r\n"))
 
-					conn.Write([]byte("HTTP/1.1 500 Internal Server Error\r\n\r\n"))
-
-					return
-
-				}
-
-				fmt.Fprintf(conn, "HTTP/1.1 201 Created\r\n\r\n")
-
-			} else {
-
-				conn.Write([]byte("HTTP/1.1 404 Not Found\r\n\r\n"))
+				return
 
 			}
 
-		}(conn)
+			c.Write([]byte("HTTP/1.1 201 Created\r\n\r\n"))
+
+		}
+
+	} else {
+
+		c.Write([]byte("HTTP/1.1 404 Not Found\r\n\r\n"))
 
 	}
+
+}
+
+func readUntil(r io.Reader, delim []byte) ([]byte, error) {
+
+	var buf []byte
+
+	for {
+
+		b := make([]byte, 1)
+
+		_, err := r.Read(b)
+
+		if err != nil {
+
+			return nil, err
+
+		}
+
+		buf = append(buf, b...)
+
+		if strings.HasSuffix(string(buf), string(delim)) {
+
+			break
+
+		}
+
+	}
+
+	// return buf, nil
+
+	bufMinusDelim := buf[:len(buf)-len(delim)]
+
+	return bufMinusDelim, nil
 
 }
